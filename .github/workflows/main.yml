@@ -1,0 +1,51 @@
+name: Update IP List
+on:
+  schedule:
+    - cron: '0 */6 * * *' # 每6小时运行一次
+  workflow_dispatch:      # 允许手动运行
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Fetch and Process IP
+        run: |
+          # 抓取数据
+          curl -s https://vps789.com/openApi/cfIpTop20 > data1.json
+          curl -s https://vps789.com/openApi/cfIpApi > data2.json
+          
+          python3 - <<EOF
+          import json
+          ips = []
+          def extract(file):
+              try:
+                  with open(file, 'r') as f:
+                      d = json.load(f)
+                      data = d.get('data', {})
+                      if isinstance(data, list):
+                          for i in data: ips.append(i.get('ip'))
+                      elif isinstance(data, dict):
+                          for k in ['CT', 'CU', 'CM', 'AllAvg']:
+                              for i in data.get(k, []): ips.append(i.get('ip'))
+              except: pass
+
+          extract('data1.json')
+          extract('data2.json')
+          
+          # 去重并写入格式
+          unique_ips = list(dict.fromkeys([ip for ip in ips if ip]))
+          with open('ip.txt', 'w') as f:
+              for idx, ip in enumerate(unique_ips[:50], 1):
+                  f.write(f"{ip}:443#lyz_优选{idx}\n")
+          EOF
+
+      - name: Commit and Push
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add ip.txt
+          git commit -m "Update IPs" || exit 0
+          git push
