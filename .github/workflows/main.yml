@@ -1,7 +1,6 @@
-name: Ultimate Stable IP List (Daily)
+name: Ultimate IP List
 on:
   schedule:
-    # 每天北京时间凌晨 0:00 (UTC 16:00) 运行一次
     - cron: '0 16 * * *' 
   workflow_dispatch:
 
@@ -17,7 +16,7 @@ jobs:
           python3 - <<EOF
           import json, urllib.request, socket, re, time
 
-          # 接口配置
+          # 配置 8 个核心接口
           region_urls = {
               "全球": "https://vps789.com/openApi/cheapVpsTop10",
               "美国": "https://vps789.com/openApi/usVpsTop10",
@@ -36,11 +35,10 @@ jobs:
           def get_country(target):
               try:
                   query_ip = socket.gethostbyname(target.split(':')[0])
-                  time.sleep(1) # 增加延迟，彻底避免 API 屏蔽
+                  time.sleep(0.5) 
                   req = urllib.request.Request(f'http://ip-api.com/json/{query_ip}?fields=countryCode')
                   with urllib.request.urlopen(req, timeout=5) as resp:
-                      code = json.loads(resp.read().decode()).get('countryCode', 'UN')
-                      return code if code else 'UN'
+                      return json.loads(resp.read().decode()).get('countryCode', 'UN')
               except: return 'XX'
 
           def fetch_json(url):
@@ -50,50 +48,45 @@ jobs:
                       return json.loads(resp.read().decode())
               except: return {}
 
-          # 1. 地区接口 (每区选1个最稳的)
+          # 1. 地区接口：改用接口原生的 avgScore 排序（分越低越好）
           for name, url in region_urls.items():
               data = fetch_json(url).get('data', {}).get('good', [])
-              # 0丢包 + ydScore最低
-              stable = sorted([i for i in data if i.get('ydPkgLostRate', 1) == 0], key=lambda x: x.get('ydScore', 999))
-              if stable:
-                  ip = stable[0].get('ip')
+              data.sort(key=lambda x: x.get('avgScore', 999))
+              if data:
+                  ip = data[0].get('ip')
                   if ip and ip not in seen_ips:
                       seen_ips.add(ip)
                       tag = "IP" if ip_pattern.match(ip) else "域名"
                       addr = f"{ip}:443" if tag == "IP" else ip
-                      final_list.append(f"{addr}# {get_country(ip)}_{name}{tag}")
+                      final_list.append(f"{addr}# {get_country(ip)}_{name}")
 
-          # 2. 运营商专项 (三网各选2个，总共6个)
+          # 2. 运营商专项：匹配对应运营商的 Score 字段
           api_data = fetch_json(api_url).get('data', {})
-          net_configs = [("移动", "CM", "yd"), ("电信", "CT", "dx"), ("联通", "CU", "lt")]
-          for net_name, key, pref in net_configs:
+          for net_name, key in [("移动", "CM"), ("电信", "CT"), ("联通", "CU")]:
               items = api_data.get(key, [])
-              def sort_key(x):
-                  loss = x.get(f'{pref}PkgLostRateAvg') or x.get(f'{pref}PkgLostRate') or 100
-                  lat = x.get(f'{pref}LatencyAvg') or x.get(f'{pref}Latency') or 999
-                  return (float(loss), float(lat))
-              
-              sorted_net = sorted(items, key=sort_key)
+              if not items: items = api_data.get('AllAvg', [])
+              score_key = 'ydScore' if key=='CM' else ('dxScore' if key=='CT' else 'ltScore')
+              items.sort(key=lambda x: x.get(score_key, 999))
               count = 0
-              for item in sorted_net:
+              for item in items:
                   ip = item.get('ip')
                   if ip and ip not in seen_ips and ip_pattern.match(ip):
                       seen_ips.add(ip)
-                      final_list.append(f"{ip}:443# {get_country(ip)}_{net_name}优选")
+                      final_list.append(f"{ip}:443# {get_country(ip)}_{net_name}")
                       count += 1
                       if count >= 2: break
 
-          # 3. 综合 Top20 (选4个压轴域名/IP)
+          # 3. Top20 接口：取前 4 名
           top20 = fetch_json(top20_url).get('data', {}).get('good', [])
-          top20_best = sorted(top20, key=lambda x: x.get('avgScore', 999))
+          top20.sort(key=lambda x: x.get('avgScore', 999))
           added_t20 = 0
-          for item in top20_best:
+          for item in top20:
               ip = item.get('ip')
               if ip and ip not in seen_ips:
                   seen_ips.add(ip)
                   tag = "IP" if ip_pattern.match(ip) else "域名"
                   addr = f"{ip}:443" if tag == "IP" else ip
-                  final_list.append(f"{addr}# {get_country(ip)}_综合Top")
+                  final_list.append(f"{addr}# {get_country(ip)}_Top20")
                   added_t20 += 1
                   if added_t20 >= 4: break
 
@@ -106,5 +99,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add ip.txt
-          git commit -m "Daily Update: $(date +'%Y-%m-%d')" || exit 0
+          git commit -m "Aggregated high-connectivity IPs" || exit 0
           git push
