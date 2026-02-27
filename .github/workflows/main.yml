@@ -1,4 +1,25 @@
-import json, urllib.request, socket, re
+name: Update IP List
+on:
+  schedule:
+    - cron: '0 */6 * * *' # 第 6 行：确保这里是 2 或 4 个空格缩进，且 cron 值有引号
+  workflow_dispatch:      
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Fetch and Process IP with Geo
+        run: |
+          # 1. 抓取原始数据
+          curl -s https://vps789.com/openApi/cfIpTop20 > data_domain.json
+          curl -s https://vps789.com/openApi/cfIpApi > data_ip.json
+          
+          # 2. 执行 Python 优选逻辑
+          python3 - <<EOF
+          import json, urllib.request, socket, re
 
           final_list = []
           ip_pattern = re.compile(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$')
@@ -12,12 +33,11 @@ import json, urllib.request, socket, re
               except:
                   return 'XX'
 
-          # --- 1. 处理域名接口 (cfIpTop20) ---
+          # 处理域名 (Top 20)
           try:
               with open('data_domain.json', 'r') as f:
                   d = json.load(f)
                   items = d.get('data', {}).get('good', [])
-                  # 针对移动排序：ydScore
                   items.sort(key=lambda x: x.get('ydScore', 999))
                   for idx, item in enumerate(items[:2], 1):
                       domain = item.get('ip')
@@ -25,23 +45,16 @@ import json, urllib.request, socket, re
                       final_list.append(f"{domain}# {country}+域名优选{idx}")
           except: pass
 
-          # --- 2. 处理纯 IP 接口 (cfIpApi) ---
+          # 处理纯 IP (接口数据结构对齐)
           try:
               with open('data_ip.json', 'r') as f:
                   d = json.load(f)
                   raw_data = d.get('data', {})
-                  
                   all_raw_ips = []
-                  # 合并所有分类中的 IP 项
                   for cat in ['CM', 'CT', 'CU', 'AllAvg']:
                       all_raw_ips.extend(raw_data.get(cat, []))
 
-                  # 核心优选逻辑：
-                  # 1. 必须是纯 IP 格式
-                  # 2. 针对移动优化：按 ydPkgLostRateAvg (丢包) 第一优先，ydLatencyAvg (延迟) 第二优先
-                  # 3. 过滤掉重复 IP
                   seen = set()
-                  # 先过滤掉域名，只留 IP，并确保丢包率尽量低
                   valid_ips = []
                   for i in all_raw_ips:
                       ip = i.get('ip')
@@ -49,10 +62,9 @@ import json, urllib.request, socket, re
                           seen.add(ip)
                           valid_ips.append(i)
 
-                  # 按照移动指标排序：先排丢包，再排延迟
+                  # 针对移动指标：ydPkgLostRateAvg(丢包)优先，ydLatencyAvg(延迟)次之
                   valid_ips.sort(key=lambda x: (x.get('ydPkgLostRateAvg', 100), x.get('ydLatencyAvg', 999)))
 
-                  # 补充到总数 16 个
                   needed = 16 - len(final_list)
                   for idx, item in enumerate(valid_ips[:needed], 1):
                       ip = item.get('ip')
@@ -60,6 +72,14 @@ import json, urllib.request, socket, re
                       final_list.append(f"{ip}:443#lyz_{country}_优选{idx}")
           except: pass
 
-          # --- 3. 写入文件 ---
           with open('ip.txt', 'w') as f:
               f.write('\n'.join(final_list))
+          EOF
+
+      - name: Commit and Push
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add ip.txt
+          git commit -m "Update 16 optimized IPs $(date)" || exit 0
+          git push
