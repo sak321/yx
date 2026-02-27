@@ -1,8 +1,8 @@
 name: Update IP List
 on:
   schedule:
-    - cron: '0 */6 * * *' # 每 6 小时运行一次
-  workflow_dispatch:      # 允许手动运行
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -14,43 +14,70 @@ jobs:
       - name: Fetch and Process IP with Geo
         run: |
           # 抓取数据
-          curl -s https://vps789.com/openApi/cfIpTop20 > data1.json
-          curl -s https://vps789.com/openApi/cfIpApi > data2.json
+          curl -s https://vps789.com/openApi/cfIpTop20 > data_domain.json
+          curl -s https://vps789.com/openApi/cfIpApi > data_ip.json
           
           python3 - <<EOF
-          import json, urllib.request
+          import json, urllib.request, socket
 
-          ips = []
-          def extract(file):
+          final_list = []
+
+          def get_country(target):
               try:
-                  with open(file, 'r') as f:
-                      d = json.load(f)
-                      data = d.get('data', {})
-                      if isinstance(data, list):
-                          for i in data: ips.append(i.get('ip'))
-                      elif isinstance(data, dict):
-                          for k in ['CT', 'CU', 'CM', 'AllAvg']:
-                              for i in data.get(k, []): ips.append(i.get('ip'))
-              except: pass
+                  # 如果是域名先转成IP
+                  host = target.split(':')[0]
+                  query_ip = socket.gethostbyname(host)
+                  with urllib.request.urlopen(f'http://ip-api.com/json/{query_ip}?fields=countryCode', timeout=3) as resp:
+                      return json.loads(resp.read().decode()).get('countryCode', 'UN')
+              except:
+                  return 'XX'
 
-          extract('data1.json')
-          extract('data2.json')
-          
-          # 去重并只取前 50 个
-          unique_ips = list(dict.fromkeys([ip for ip in ips if ip]))[:50]
-          
+          # --- 1. 处理域名接口 (cfIpTop20) ---
+          try:
+              with open('data_domain.json', 'r') as f:
+                  d = json.load(f)
+                  # 专门选移动(yd)丢包为0且得分最低的前2个
+                  items = d.get('data', {}).get('good', [])
+                  mobile_domains = sorted(
+                      [i for i in items if i.get('ydPkgLostRate') == 0],
+                      key=lambda x: x.get('ydScore', 999)
+                  )[:2]
+                  
+                  for idx, item in enumerate(mobile_domains, 1):
+                      domain = item.get('ip')
+                      country = get_country(domain)
+                      final_list.append(f"{domain}# {country}+域名优选{idx}")
+          except: pass
+
+          # --- 2. 处理纯 IP 接口 (cfIpApi) ---
+          try:
+              with open('data_ip.json', 'r') as f:
+                  d = json.load(f)
+                  # 提取 CM (中国移动) 列表
+                  ip_items = d.get('data', {}).get('CM', [])
+                  if not ip_items: # 如果CM没数据，拿AllAvg凑
+                      ip_items = d.get('data', {}).get('AllAvg', [])
+                  
+                  # 优选逻辑：丢包<5%，按延迟排序
+                  best_ips = sorted(
+                      [i for i in ip_items if float(i.get('loss', 100)) < 5],
+                      key=lambda x: float(x.get('latency', 999))
+                  )
+
+                  # 填充剩余名额 (16 - 已有数量)
+                  needed = 16 - len(final_list)
+                  for idx, item in enumerate(best_ips[:needed], 1):
+                      ip = item.get('ip')
+                      country = get_country(ip)
+                      # 纯IP格式保留 :443 确保直接可用
+                      final_list.append(f"{ip}:443#lyz_{country}_优选{idx}")
+          except: pass
+
+          # --- 3. 写入文件 ---
           with open('ip.txt', 'w') as f:
-              for idx, ip in enumerate(unique_ips, 1):
-                  try:
-                      # 查询归属地国家代码
-                      with urllib.request.urlopen(f'http://ip-api.com/json/{ip}?fields=countryCode', timeout=3) as response:
-                          geo_data = json.loads(response.read().decode())
-                          country = geo_data.get('countryCode', 'UN')
-                  except:
-                      country = 'XX'
-                      
-                  # 写入文件，格式：IP:端口#lyz_国家_优选序号
-                  f.write(f"{ip}:443#lyz_{country}_优选{idx}\n")
+              f.write('\n'.join(final_list))
+          
+          print(f"成功导出 {len(final_list)} 个节点")
           EOF
 
       - name: Commit and Push
@@ -58,5 +85,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add ip.txt
-          git commit -m "Update IPs with Geo info every 6h" || exit 0
+          git commit -m "Update 16 optimized IPs and Domains" || exit 0
           git push
