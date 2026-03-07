@@ -3,7 +3,7 @@ name: Collect Node IPs
 on:
   workflow_dispatch: # 支持手动触发
   schedule:
-    - cron: '0 */6 * * *' # 每6小时自动运行一次
+    - cron: '0 */16 * * *' # 每6小时自动运行一次
 
 jobs:
   collect:
