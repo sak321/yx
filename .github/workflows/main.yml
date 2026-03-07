@@ -1,7 +1,7 @@
 name: Update IP List
 on:
   schedule:
-    - cron: '0 */6 * * *' # 第 6 行：确保这里是 2 或 4 个空格缩进，且 cron 值有引号
+    - cron: '0 */16 * * *' # 第 6 行：确保这里是 2 或 4 个空格缩进，且 cron 值有引号
   workflow_dispatch:      
 
 jobs:
