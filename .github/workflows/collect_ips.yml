@@ -1,54 +1,156 @@
 name: Collect Node IPs
 
 on:
-  workflow_dispatch: # 支持手动触发
+  workflow_dispatch:
+
   schedule:
-    - cron: '0 */16 * * *' # 每6小时自动运行一次
+    # 每6小时运行一次
+    - cron: "0 */6 * * *"
+
 
 jobs:
   collect:
+
     runs-on: ubuntu-latest
+
     steps:
+
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Fetch and Process IPs
-        run: |
-          # 定义所有接口地址
-          URLS=(
-            "https://ddx.snu.cc/TW"
-            "https://ddx.snu.cc/HK"
-            "https://ddx.snu.cc/JP"
-            "https://ddx.snu.cc/KR"
-            "https://ddx.snu.cc/SG"
-            "https://ddx.snu.cc/US"
-          )
-          
-          # 创建临时文件
-          touch temp_ips.txt
-          
-          # 循环抓取内容
-          for url in "${URLS[@]}"; do
-            echo "Fetching $url..."
-            curl -s "$url" >> temp_ips.txt
-            echo "" >> temp_ips.txt
-          done
-          
-          # 核心提取逻辑：提取 IP:端口 并去重
-          # 这里将结果重定向到你指定的 wuya.txt 文件中
-          grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]+' temp_ips.txt | sort -u > wuya.txt
-          
-          echo "Total IPs collected and saved to wuya.txt: $(wc -l < wuya.txt)"
 
-      - name: Commit and Push
+      - name: Fetch and Generate wuya.txt
+        shell: bash
         run: |
-          git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Action"
-          # 确保添加的是 wuya.txt
+
+          echo "Start collecting IPs..."
+
+          python3 <<'EOF'
+
+          import urllib.request
+          import re
+
+
+          urls = [
+
+              "https://ddx.snu.cc/TW",
+              "https://ddx.snu.cc/HK",
+              "https://ddx.snu.cc/JP",
+              "https://ddx.snu.cc/KR",
+              "https://ddx.snu.cc/SG",
+              "https://ddx.snu.cc/US"
+
+          ]
+
+
+          result = set()
+
+
+          # 匹配 xxx.xxx.xxx.xxx:端口
+          ip_port_pattern = re.compile(
+              r'\b(?:\d{1,3}\.){3}\d{1,3}:\d+\b'
+          )
+
+
+          for url in urls:
+
+              try:
+
+                  print("Fetching:", url)
+
+
+                  req = urllib.request.Request(
+                      url,
+                      headers={
+                          "User-Agent": "Mozilla/5.0"
+                      }
+                  )
+
+
+                  with urllib.request.urlopen(
+                      req,
+                      timeout=20
+                  ) as response:
+
+
+                      data = response.read().decode(
+                          "utf-8",
+                          errors="ignore"
+                      )
+
+
+                  found = ip_port_pattern.findall(data)
+
+
+                  print(
+                      "Found",
+                      len(found),
+                      "IPs"
+                  )
+
+
+                  result.update(found)
+
+
+              except Exception as e:
+
+                  print(
+                      "ERROR:",
+                      url,
+                      e
+                  )
+
+
+          result = sorted(result)
+
+
+          print(
+              "Total unique:",
+              len(result)
+          )
+
+
+          with open(
+              "wuya.txt",
+              "w",
+              encoding="utf-8"
+          ) as f:
+
+
+              for ip in result:
+
+                  f.write(ip + "\n")
+
+
+          EOF
+
+
+          echo "===== wuya.txt ====="
+
+          cat wuya.txt
+
+          echo "===================="
+
+          echo "Lines:"
+          wc -l wuya.txt
+
+
+
+      - name: Commit wuya.txt
+
+        run: |
+
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+
+          git config --local user.name "github-actions[bot]"
+
+
           git add wuya.txt
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Update wuya.txt with latest IPs: $(date +'%Y-%m-%d %H:%M:%S')"
-            git push
-          fi
+
+
+          git commit \
+          -m "Update wuya.txt $(date '+%Y-%m-%d %H:%M:%S')" \
+          || echo "No changes"
+
+
+          git push
